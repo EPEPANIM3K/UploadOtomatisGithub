@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple GitHub Manager (Auto Init + Auto Create Repo + Sensitive File Guard)
+Simple GitHub Manager (Final Version)
+Fitur: Auto Init, Create Repo, Sensitive File Guard, Rename Repo.
 Jalankan: python git_manager.py
 """
 
@@ -62,14 +63,12 @@ def is_sensitive(path):
     return False
 
 def scan_sensitive():
-    """Scan seluruh working directory, kembalikan list path sensitif."""
     hasil = []
     skip_dirs = {".git", "node_modules", "venv", ".venv", "__pycache__",
                  "dist", "build", ".next", ".nuxt", "target", "vendor"}
     for root, dirs, files in os.walk("."):
-        # filter folder
         dirs[:] = [d for d in dirs if d not in skip_dirs]
-        # skip isi folder sensitif (misal .ssh)
+        
         if any(sd in root for sd in SENSITIVE_DIRS):
             for f in files:
                 full = os.path.join(root, f)
@@ -77,6 +76,7 @@ def scan_sensitive():
                     full = full[2:]
                 hasil.append(full)
             continue
+            
         for f in files:
             full = os.path.join(root, f)
             if full.startswith(".\\") or full.startswith("./"):
@@ -85,19 +85,7 @@ def scan_sensitive():
                 hasil.append(full)
     return sorted(set(hasil))
 
-def get_tracked_sensitive():
-    """Ambil path sensitif yang sudah ter-track git (kalau ada)."""
-    rc, out, err = run_cmd("git ls-files")
-    if rc != 0:
-        return []
-    tracked = out.splitlines()
-    return [f for f in tracked if is_sensitive(f)]
-
 def konfirmasi_sensitive():
-    """
-    Tampilkan file sensitif, minta user pilih yang mau di-skip.
-    Return list file yang harus di-skip (unstage + gitignore).
-    """
     files = scan_sensitive()
     if not files:
         print("\n✅ Tidak ada file sensitif terdeteksi.")
@@ -135,7 +123,6 @@ def konfirmasi_sensitive():
     return skip
 
 def tangani_skip(skip_files):
-    """Unstage & gitignore file yang di-skip."""
     if not skip_files:
         print("\n✅ Semua file diupload (kamu sudah konfirmasi).")
         return
@@ -144,7 +131,6 @@ def tangani_skip(skip_files):
     for f in skip_files:
         print(f"   - {f}")
 
-    # Tulis ke .gitignore
     gitignore_path = ".gitignore"
     existing = set()
     if os.path.exists(gitignore_path):
@@ -158,8 +144,8 @@ def tangani_skip(skip_files):
                 fh.write(f + "\n")
                 added.append(f)
 
-    # Unstage kalau sudah terlanjur ter-add
     for f in skip_files:
+        # Menggunakan >nul untuk Windows, ganti ke >/dev/null jika pakai Linux/Mac
         run_cmd(f'git rm --cached -r "{f}" 2>nul')
 
     if added:
@@ -186,7 +172,6 @@ def auto_setup():
     # Cek commit awal
     rc, out, err = run_cmd("git rev-parse --verify HEAD")
     if rc != 0:
-        # SEBELUM commit awal, cek file sensitif dulu!
         skip = konfirmasi_sensitive()
         tangani_skip(skip)
 
@@ -212,7 +197,6 @@ def auto_setup():
     if not repo_name:
         repo_name = default_name
 
-    # Validasi sederhana
     if " " in repo_name:
         print("⚠️  Nama repo tidak boleh ada spasi, spasi diganti '-'")
         repo_name = repo_name.replace(" ", "-")
@@ -234,7 +218,7 @@ def auto_setup():
     return True
 
 # ============================================================
-# Menu utama
+# Menu & Fitur Utama
 # ============================================================
 def menu():
     print("\n" + "="*40)
@@ -245,11 +229,11 @@ def menu():
     print("3. Delete (hapus file/folder dari repo)")
     print("4. Status repository")
     print("5. Scan file sensitif sekarang")
-    print("6. Keluar")
+    print("6. Edit Nama Repository")
+    print("7. Keluar")
     print("="*40)
 
 def upload():
-    # Scan & konfirmasi file sensitif dulu
     skip = konfirmasi_sensitive()
     tangani_skip(skip)
 
@@ -331,7 +315,6 @@ def status():
     print(out if out else "  (tidak ada perubahan)")
 
 def scan_menu():
-    """Menu khusus scan file sensitif tanpa upload."""
     files = scan_sensitive()
     if not files:
         print("\n✅ Tidak ada file sensitif terdeteksi.")
@@ -343,6 +326,44 @@ def scan_menu():
     tanya = input("Tambahkan semua ke .gitignore sekarang? (y/n): ").strip().lower()
     if tanya == "y":
         tangani_skip(files)
+
+def edit_repo_name():
+    print("\n✏️  Edit Nama Repository di GitHub")
+    
+    rc, current_url, err = run_cmd("git remote get-url origin")
+    if rc != 0:
+        print("❌ Remote 'origin' belum diatur. Tidak ada repo yang bisa diedit.")
+        return
+
+    current_name = current_url.split("/")[-1].replace(".git", "")
+    print(f"📦 Nama repository saat ini: {current_name}")
+
+    new_name = input("Masukkan nama repository baru: ").strip()
+    if not new_name:
+        print("❌ Nama tidak boleh kosong. Dibatalkan.")
+        return
+    
+    if " " in new_name:
+        print("⚠️  Spasi tidak diizinkan, spasi diganti dengan '-'")
+        new_name = new_name.replace(" ", "-")
+
+    if new_name == current_name:
+        print("ℹ️  Nama baru sama dengan nama lama. Tidak ada yang diubah.")
+        return
+
+    konfirmasi = input(f"Yakin ubah nama repo menjadi '{new_name}'? (y/n): ").strip().lower()
+    if konfirmasi != 'y':
+        print("❌ Dibatalkan")
+        return
+
+    print(f"\n🔄 Mengubah nama repo menjadi '{new_name}'...")
+    rc, out, err = run_cmd(f"gh repo rename {new_name} --yes")
+    
+    if rc != 0:
+        print(f"❌ Gagal mengubah nama repo: {err}")
+    else:
+        print(f"✅ Berhasil mengubah nama repo menjadi '{new_name}'!")
+        print("✅ Remote URL di Git lokal sudah diperbarui otomatis.")
 
 # ============================================================
 # Main
@@ -359,7 +380,7 @@ def main():
 
     while True:
         menu()
-        pilih = input("Pilih menu (1-6): ").strip()
+        pilih = input("Pilih menu (1-7): ").strip()
 
         if pilih == "1":
             upload()
@@ -372,6 +393,8 @@ def main():
         elif pilih == "5":
             scan_menu()
         elif pilih == "6":
+            edit_repo_name()
+        elif pilih == "7":
             print("\n👋 Sampai jumpa!")
             break
         else:
