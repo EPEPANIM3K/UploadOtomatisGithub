@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple GitHub Manager (Final Version)
-Fitur: Auto Init, Create Repo, Sensitive File Guard, Rename Repo.
+Simple GitHub Manager (Final v2)
+Fitur: Lazy Init, Create Repo, Sensitive File Guard, Rename Repo, Git Clone.
 Jalankan: python git_manager.py
 """
 
@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import fnmatch
+import re
 
 # ============================================================
 # Konfigurasi pola file sensitif
@@ -25,8 +26,6 @@ SENSITIVE_PATTERNS = [
 ]
 
 SENSITIVE_DIRS = [".ssh", ".aws", ".gnupg", ".docker"]
-
-# File yang tidak perlu dianggap sensitif meski namanya cocok
 WHITELIST = [".env.example", ".env.sample", ".env.template", "config.example.*"]
 
 # ============================================================
@@ -98,8 +97,7 @@ def konfirmasi_sensitive():
     for i, f in enumerate(files, 1):
         print(f"  {i}. {f}")
     print("\nPilihan:")
-    print("  - Ketik nomor yang mau di-SKIP (tidak diupload), pisah koma")
-    print("    contoh: 1,2   -> skip file 1 dan 2")
+    print("  - Ketik nomor yang mau di-SKIP (tidak diupload), pisah koma (cth: 1,2)")
     print("  - Ketik 'all'      -> skip SEMUA file sensitif")
     print("  - Ketik 'none'     -> upload SEMUA (berisiko!)")
     print("  - Tekan Enter      -> skip SEMUA (paling aman)")
@@ -124,7 +122,6 @@ def konfirmasi_sensitive():
 
 def tangani_skip(skip_files):
     if not skip_files:
-        print("\n✅ Semua file diupload (kamu sudah konfirmasi).")
         return
 
     print(f"\n🚫 Akan di-skip {len(skip_files)} file:")
@@ -145,18 +142,17 @@ def tangani_skip(skip_files):
                 added.append(f)
 
     for f in skip_files:
-        # Menggunakan >nul untuk Windows, ganti ke >/dev/null jika pakai Linux/Mac
         run_cmd(f'git rm --cached -r "{f}" 2>nul')
 
     if added:
         print(f"✅ Ditambahkan ke .gitignore: {len(added)} file")
-    print("✅ File sensitif aman, tidak akan ikut ter-upload.")
+    print("✅ File sensitif aman.")
 
 # ============================================================
-# Setup otomatis
+# Setup otomatis (Dipanggil saat Upload)
 # ============================================================
 def auto_setup():
-    print("\n🔧 Memulai setup otomatis...")
+    print("\n🔧 Memulai setup / inisialisasi...")
 
     if not cek_repo():
         print("📁 Inisialisasi Git repository...")
@@ -166,7 +162,6 @@ def auto_setup():
             return False
         print("✅ Git init berhasil (branch: main)")
     else:
-        print("ℹ️  Git repository sudah ada, skip init.")
         run_cmd("git branch -M main")
 
     # Cek commit awal
@@ -186,10 +181,9 @@ def auto_setup():
     # Cek remote origin
     rc, out, err = run_cmd("git remote get-url origin")
     if rc == 0:
-        print(f"ℹ️  Remote origin sudah ada: {out}")
-        return True
+        return True # Sudah ada remote, siap upload
 
-    # Minta nama repo
+    # Jika belum ada remote, minta buat repo baru
     default_name = os.path.basename(os.getcwd())
     print(f"\n🌐 Membuat repository GitHub baru")
     print(f"   Nama folder saat ini: {default_name}")
@@ -198,7 +192,6 @@ def auto_setup():
         repo_name = default_name
 
     if " " in repo_name:
-        print("⚠️  Nama repo tidak boleh ada spasi, spasi diganti '-'")
         repo_name = repo_name.replace(" ", "-")
 
     vis = input("Tipe repo? (public/private) [default: private]: ").strip().lower()
@@ -214,7 +207,6 @@ def auto_setup():
         return False
 
     print(f"✅ Repository GitHub berhasil dibuat dan di-push!")
-    print(f"   {out}")
     return True
 
 # ============================================================
@@ -229,11 +221,16 @@ def menu():
     print("3. Delete (hapus file/folder dari repo)")
     print("4. Status repository")
     print("5. Scan file sensitif sekarang")
-    print("6. Edit Nama Repository")
-    print("7. Keluar")
+    print("6. Git Clone (Download Repo)")
+    print("7. Edit Nama Repository")
+    print("8. Keluar")
     print("="*40)
 
 def upload():
+    if not auto_setup():
+        print("\n❌ Setup gagal. Upload dibatalkan.")
+        return
+
     skip = konfirmasi_sensitive()
     tangani_skip(skip)
 
@@ -265,6 +262,9 @@ def upload():
         print("✅ Push berhasil!")
 
 def pull():
+    if not cek_repo():
+        print("❌ Folder ini bukan git repository.")
+        return
     print("\n⬇️  Pull dari remote...")
     rc, out, err = run_cmd("git pull")
     if rc != 0:
@@ -273,13 +273,13 @@ def pull():
         print(f"✅ Pull berhasil:\n{out}")
 
 def delete():
+    if not cek_repo():
+        print("❌ Folder ini bukan git repository.")
+        return
     print("\n🗑️  Hapus file/folder dari repository")
     target = input("Path yang mau dihapus: ").strip()
-    if not target:
-        print("❌ Path kosong!")
-        return
-    if not os.path.exists(target):
-        print(f"❌ '{target}' tidak ditemukan!")
+    if not target or not os.path.exists(target):
+        print(f"❌ Path kosong atau '{target}' tidak ditemukan!")
         return
 
     konfirmasi = input(f"Yakin hapus '{target}'? (y/n): ").strip().lower()
@@ -308,6 +308,9 @@ def delete():
         print("✅ Push berhasil!")
 
 def status():
+    if not cek_repo():
+        print("❌ Folder ini bukan git repository.")
+        return
     rc, out, err = run_cmd("git status -s")
     branch = run_cmd("git branch --show-current")[1]
     print(f"\n📋 Branch: {branch}")
@@ -327,12 +330,54 @@ def scan_menu():
     if tanya == "y":
         tangani_skip(files)
 
+def git_clone():
+    print("\n📥 Git Clone (Download Repository)")
+    url = input("Masukkan URL Repository (HTTPS/SSH): ").strip()
+    if not url:
+        print("❌ URL tidak boleh kosong. Dibatalkan.")
+        return
+
+    # Ekstrak nama folder dari URL
+    # Contoh: https://github.com/user/repo.git -> repo
+    # Contoh: git@github.com:user/repo.git -> repo
+    match = re.search(r'([^/]+?)(?:\.git)?$', url)
+    if match:
+        folder_name = match.group(1)
+    else:
+        folder_name = "cloned_repo"
+
+    if os.path.exists(folder_name):
+        print(f"❌ Folder '{folder_name}' sudah ada di direktori ini.")
+        print("   Pindahkan atau hapus folder tersebut, atau clone di folder lain.")
+        return
+
+    print(f"\n⬇️  Meng-clone ke folder '{folder_name}'...")
+    rc, out, err = run_cmd(f"git clone {url}")
+    if rc != 0:
+        print(f"❌ Gagal clone: {err}")
+        return
+
+    print(f"✅ Berhasil meng-clone repository!")
+
+    # Tawarkan buka di VS Code
+    buka = input(f"\nBuka folder '{folder_name}' di VS Code? (y/n): ").strip().lower()
+    if buka == 'y':
+        print("🚀 Membuka VS Code...")
+        # Menjalankan perintah 'code' milik VS Code
+        rc, out, err = run_cmd(f'code "{folder_name}"')
+        if rc != 0:
+            print(f"⚠️  Gagal membuka VS Code. Pastikan perintah 'code' sudah ada di PATH.")
+            print(f"    Kamu bisa buka manual foldernya: {folder_name}")
+
 def edit_repo_name():
     print("\n✏️  Edit Nama Repository di GitHub")
-    
+    if not cek_repo():
+        print("❌ Folder ini bukan git repository.")
+        return
+
     rc, current_url, err = run_cmd("git remote get-url origin")
     if rc != 0:
-        print("❌ Remote 'origin' belum diatur. Tidak ada repo yang bisa diedit.")
+        print("❌ Remote 'origin' belum diatur.")
         return
 
     current_name = current_url.split("/")[-1].replace(".git", "")
@@ -340,15 +385,13 @@ def edit_repo_name():
 
     new_name = input("Masukkan nama repository baru: ").strip()
     if not new_name:
-        print("❌ Nama tidak boleh kosong. Dibatalkan.")
         return
     
     if " " in new_name:
-        print("⚠️  Spasi tidak diizinkan, spasi diganti dengan '-'")
         new_name = new_name.replace(" ", "-")
 
     if new_name == current_name:
-        print("ℹ️  Nama baru sama dengan nama lama. Tidak ada yang diubah.")
+        print("ℹ️  Nama baru sama dengan nama lama.")
         return
 
     konfirmasi = input(f"Yakin ubah nama repo menjadi '{new_name}'? (y/n): ").strip().lower()
@@ -374,13 +417,9 @@ def main():
         print("   Jalankan: gh auth login")
         sys.exit(1)
 
-    if not auto_setup():
-        print("\n❌ Setup otomatis gagal. Periksa error di atas.")
-        sys.exit(1)
-
     while True:
         menu()
-        pilih = input("Pilih menu (1-7): ").strip()
+        pilih = input("Pilih menu (1-8): ").strip()
 
         if pilih == "1":
             upload()
@@ -393,8 +432,10 @@ def main():
         elif pilih == "5":
             scan_menu()
         elif pilih == "6":
-            edit_repo_name()
+            git_clone()
         elif pilih == "7":
+            edit_repo_name()
+        elif pilih == "8":
             print("\n👋 Sampai jumpa!")
             break
         else:
